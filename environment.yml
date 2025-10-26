@@ -1,0 +1,31 @@
+name: mineai
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - pillow
+  - rasterio
+  - geopandas
+  - shapely
+  - fiona
+  - pyproj
+  - opencv
+  - tesseract
+  - pytesseract
+  - pdal
+  - rich
+  - tqdm
+  - streamlit
+  - folium
+  - nodejs
+  - jupyterlab
+  - pytest
+  - pip:
+      - ultralytics
+      - torch
+      - torchvision
+      - transformers
+      - leafmap

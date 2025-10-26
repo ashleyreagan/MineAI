@@ -1,0 +1,11 @@
+paths:
+  raw: data/raw
+  georef: data/georef
+  ocr: data/ocr
+  detect: data/detect
+  final: data/final
+  yolo_weights: models/yolo/mine_entry_yolov8n.pt
+  trocr_id: "facebook/trocr-base-printed"
+crs: "EPSG:26917"   # NAD83 / UTM zone 17N
+basemap: "usgs_topo"
+log_level: "INFO"
