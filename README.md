@@ -1,6 +1,6 @@
 <h1 align="center">🪨 MineAI</h1>
 <p align="center">
-  <em>AI-assisted geospatial intelligence for historic underground mine maps</em><br>
+  <em>AI-assisted Geospatial Intelligence for Historic Mine Maps</em><br>
   <a href="https://github.com/ashleyreagan/MineAI/stargazers">
     <img src="https://img.shields.io/github/stars/ashleyreagan/MineAI?color=gold&style=flat-square" alt="stars">
   </a>
@@ -13,30 +13,29 @@
 </p>
 
 <p align="center">
-  <img src="assets/header_banner_v2.png" width="1000" alt="MineAI banner">
+  <img src="assets/header_banner_final_proxy.png" width="1000" alt="MineAI banner">
 </p>
 
 ---
 
 ## 🧭 Overview
 
-**MineAI** converts **historic underground mine maps** into **georeferenced, machine‑readable spatial datasets** using a pipeline of OCR, deep learning (YOLOv8), and AI‑assisted georeferencing. The goal is to make century‑old survey sheets usable in modern AML/OSMRE workflows.
+**MineAI** converts **historic underground mine maps** into **georeferenced, machine-readable spatial datasets** using a pipeline of OCR, deep learning (YOLOv8), and AI-assisted georeferencing.  
+The goal is to make century-old survey sheets usable in modern AML/OSMRE workflows.
 
 ---
 
 ## 🔬 Methodology — How It Works
-
 1. **Ingestion & QC** — Load scanned rasters, read EXIF/DPI, build an ingest manifest.  
-2. **AI‑Assisted Georeferencing** — Detect alignment cues (GCPs, section lines, rivers) and solve affine/projective warps to USGS/NAIP basemaps.  
-3. **OCR & Layout Parsing** — Extract mine names, seam notes, T/R/S, and annotations using Tesseract + (optional) TrOCR for low‑quality handwriting.  
+2. **AI-Assisted Georeferencing** — Detect alignment cues (GCPs, section lines, rivers) and solve affine/projective warps to USGS/NAIP basemaps.  
+3. **OCR & Layout Parsing** — Extract mine names, seam notes, T/R/S, and annotations using Tesseract + (optional) TrOCR for low-quality handwriting.  
 4. **Mine Entry Detection** — YOLOv8 identifies portal, adit, and shaft symbols; detections are projected into map coordinates.  
-5. **Post‑processing & Export** — Clean duplicates, attach metadata, export to Shapefile/GeoJSON, optionally run PDAL normalization for LiDAR contexts.  
+5. **Post-processing & Export** — Clean duplicates, attach metadata, export to Shapefile/GeoJSON, optionally run PDAL normalization for LiDAR contexts.  
 6. **QA Visualization** — Streamlit dashboard previews rasters/detections for analyst review and final export.
 
 ---
 
 ## 🧩 Architecture
-
 ```
                  ┌────────────┐
    Scans (.tif)  │  Ingest    │  EXIF/DPI, manifest
@@ -67,7 +66,6 @@
 ---
 
 ## 🚀 Quickstart
-
 ```bash
 conda env create -f environment.yml
 conda activate mineai
@@ -79,30 +77,25 @@ python run_pipeline.py
 streamlit run src/gui/app_streamlit.py
 ```
 
-**Inputs:** place `.tif/.jpg/.png` scans in `data/raw/`.  
-**Outputs:** `data/final/` (shapefiles/geojson) and `data/detect/` (intermediate detections).
+Inputs: `.tif/.jpg/.png` in `data/raw/` → Outputs in `data/final/` (shapefiles/geojson) and `data/detect/` (intermediate detections).  
 
 ---
 
 ## 🧠 Models
-
 ### YOLOv8 Mine Entry Detector
-- Trained on annotated portal/adit/shaft symbols from historic sheets.  
-- Bounding boxes exported with confidence and class; coordinates mapped via georef transform.
-
-Training command:
+Trained on annotated portal/adit/shaft symbols from historic sheets.  
 ```bash
 yolo task=detect mode=train data=data/mine_entries.yaml model=yolov8m.pt epochs=100 imgsz=640
 ```
 
 ### OCR (Tesseract / TrOCR)
-- Baseline Tesseract for speed; TrOCR improves stylized handwriting.  
-- Swap models by editing `trocr_id` in `config.yaml`.
+Baseline Tesseract for speed; TrOCR improves stylized handwriting.  
+Swap models by editing `trocr_id` in `config.yaml`.
 
 ---
 
 ## 🛰️ Georeferencing Details
-- ORB/SIFT keypoints for coarse match; RANSAC for outlier‑robust alignment.  
+- ORB/SIFT keypoints for coarse match; RANSAC for outlier-robust alignment.  
 - Affine or projective warp via rasterio/GDAL.  
 - Planned: RMSE/reprojection error reporting for QA gates.
 
@@ -110,15 +103,15 @@ yolo task=detect mode=train data=data/mine_entries.yaml model=yolov8m.pt epochs=
 
 ## 🧭 Integration
 - **ArcGIS Pro / QGIS** — open shapefiles/GeoJSON directly.  
-- **AGOL / PostGIS** — optional publishing via standard connectors.  
-- **PDAL** — LiDAR normalization and DEM differencing hooks for elevation analysis.
+- **AGOL / PostGIS** — optional publishing via connectors.  
+- **PDAL** — LiDAR normalization & DEM differencing hooks for elevation analysis.
 
 ---
 
 ## 🛠️ Development & Contributing
-- Create env with `environment.yml`.  
-- Keep PRs small and focused; include a short demo map or screenshot.  
-- Linting/testing: `pytest` in `tests/` (add sample fixtures only, no giant rasters).
+Create env with `environment.yml`.  
+Keep PRs small and focused; include a small demo map or screenshot.  
+Run lint/tests with `pytest` in `tests/` (no giant rasters).
 
 ---
 
