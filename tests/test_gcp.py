@@ -124,3 +124,75 @@ def test_warped_raster_agrees_with_point_projection(tmp_path, method):
         alpha = ds.read(4)
         assert alpha.min() == 0 and alpha.max() == 255  # collar is transparent
     assert info["warped_size"][0] > 0
+
+
+def _warp_variant(tmp_path, kind):
+    from PIL import Image
+
+    src = tmp_path / "s.png"
+    make_sheet(src)
+    im = Image.open(src)
+    if kind == "paletted":
+        p = tmp_path / "pal.png"
+        im.convert("P", palette=Image.Palette.ADAPTIVE, colors=16).save(p)
+    elif kind == "rgba":
+        p = tmp_path / "rgba.png"
+        im.convert("RGBA").save(p)
+    elif kind == "bilevel":
+        p = tmp_path / "bilevel.tif"
+        a = (np.asarray(im.convert("L")) < 128).astype(np.uint8)  # ink = 1
+        with rasterio.open(p, "w", driver="GTiff", width=a.shape[1], height=a.shape[0], count=1, dtype="uint8", nbits=1) as ds:
+            ds.write(a, 1)
+    return p
+
+
+@pytest.mark.parametrize("kind,bands", [("paletted", (4,)), ("rgba", (4,)), ("bilevel", (2, 4))])
+def test_warp_handles_palette_alpha_and_one_bit(tmp_path, kind, bands):
+    # GDAL gives some 1-bit TIFFs a black/white colour table (always for MINISWHITE);
+    # those are expanded like any palette, the rest are scaled 0/1 -> 0/255.
+    p = _warp_variant(tmp_path, kind)
+    m = GCPModel.fit(gcpset(), "poly1")
+    out = tmp_path / f"{kind}_georef.tif"
+    warp_sheet(str(p), m, out)
+    with rasterio.open(out) as ds:
+        assert ds.count in bands
+        bands = ds.count
+        data = ds.read(1)
+        alpha = ds.read(bands)
+        inside = alpha > 0
+        if kind == "bilevel":
+            assert set(np.unique(data[inside])) <= {0, 255} and data[inside].max() == 255
+        else:
+            # the red symbol at PORTALS[0] keeps its colour after warping
+            ex, ey = m.forward([PORTALS[0][0] + 0.5], [PORTALS[0][1] + 0.5])
+            row, col = rasterio.transform.rowcol(ds.transform, ex[0], ey[0])
+            rgb = ds.read([1, 2, 3])[:, row, col]
+            assert rgb[0] > 150 and rgb[1] < 80, rgb
+
+
+def test_warp_embedded_paletted_geotiff(tmp_path):
+    from PIL import Image
+    from rasterio.transform import Affine
+
+    from mineai.synthetic import TRUE_AFFINE
+
+    src = tmp_path / "s.png"
+    make_sheet(src, size=(800, 600), portals=[(400, 300)], labels=[])
+    pal = Image.open(src).convert("P", palette=Image.Palette.ADAPTIVE, colors=8)
+    idx = np.asarray(pal)
+    lut = pal.getpalette()
+    x0, a, b, y0, d, e = TRUE_AFFINE
+    p = tmp_path / "geo_pal.tif"
+    with rasterio.open(p, "w", driver="GTiff", width=800, height=600, count=1, dtype="uint8",
+                       crs="EPSG:26917", transform=Affine(a, b, x0, d, e, y0)) as ds:
+        ds.write(idx, 1)
+        ds.write_colormap(1, {i: tuple(lut[3 * i : 3 * i + 3]) + (255,) for i in range(len(lut) // 3)})
+    m = GCPModel.from_affine(Affine(a, b, x0, d, e, y0), UTM17)
+    out = tmp_path / "o.tif"
+    warp_sheet(str(p), m, out)
+    with rasterio.open(out) as ds:
+        assert ds.count == 4
+        ex, ey = true_xy(400.5, 300.5)
+        row, col = rasterio.transform.rowcol(ds.transform, ex, ey)
+        rgb = ds.read([1, 2, 3])[:, row, col]
+        assert rgb[0] > 150 and rgb[1] < 80, rgb

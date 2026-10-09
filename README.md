@@ -84,7 +84,7 @@ conda activate mineai
 
 mineai run --skip detect                 # georef + OCR + export on the sample sheet
 mineai gui                               # QA dashboard
-pytest                                   # the test suite (synthetic sheets, ~20 s)
+pytest                                   # the test suite (synthetic sheets, ~30 s)
 ```
 
 The repo includes a synthetic sample sheet (`data/raw/sample_sheet.png`) and its

@@ -65,40 +65,57 @@ _GDAL_TYPES = {"uint8": "Byte", "uint16": "UInt16", "int16": "Int16", "uint32": 
                "int32": "Int32", "float32": "Float32", "float64": "Float64"}
 
 
-def _gcp_vrt(src, scan_path: str, model: GCPModel, paletted: bool) -> str:
-    """A VRT over the scan that carries the GCPs (and expands a palette to RGB).
+def _source_vrt(src, scan_path: str, model: GCPModel) -> tuple[str, int]:
+    """A VRT over the scan that carries its georeferencing and normalises the bands.
 
-    GDAL only applies GCPs that belong to the source dataset, so they are attached
-    here rather than passed to the warper. Nothing is copied; the VRT points at the scan.
+    * GDAL only applies GCPs that belong to the source dataset, so they're written
+      into the VRT rather than passed to the warper.
+    * Palettes are expanded to RGB, 1-bit scans are scaled 0/1 → 0/255, and an
+      existing alpha band is dropped (the warp adds its own).
+    Nothing is copied: the VRT points at the scan. Returns (xml, band count).
     """
     W, H = src.width, src.height
-    wkt = escape(model.crs.to_wkt(), {'"': "&quot;"})
-    gcps = "".join(
-        f'<GCP Id="{escape(str(g.id))}" Pixel="{g.col!r}" Line="{g.row!r}" X="{g.x!r}" Y="{g.y!r}" Z="0"/>'
-        for g in model.to_rasterio_gcps()
-    )
     fname = escape(str(Path(scan_path).resolve()))
     rect = f'<SrcRect xOff="0" yOff="0" xSize="{W}" ySize="{H}"/><DstRect xOff="0" yOff="0" xSize="{W}" ySize="{H}"/>'
+    try:
+        paletted = src.count == 1 and bool(src.colormap(1))
+    except ValueError:
+        paletted = False
+    nb = src.tags(1, "IMAGE_STRUCTURE").get("NBITS")
+    bilevel = nb is not None and int(nb) == 1 and not paletted
+
+    def source(band: int, extra: str = "", kind: str = "SimpleSource") -> str:
+        return (f"<{kind}><SourceFilename relativeToVRT=\"0\">{fname}</SourceFilename>"
+                f"<SourceBand>{band}</SourceBand>{rect}{extra}</{kind}>")
+
     bands = []
     if paletted:
         for i, ci in enumerate(("Red", "Green", "Blue"), 1):
-            bands.append(
-                f'<VRTRasterBand dataType="Byte" band="{i}"><ColorInterp>{ci}</ColorInterp><ComplexSource>'
-                f'<SourceFilename relativeToVRT="0">{fname}</SourceFilename><SourceBand>1</SourceBand>{rect}'
-                f"<ColorTableComponent>{i}</ColorTableComponent></ComplexSource></VRTRasterBand>"
-            )
+            bands.append(f'<VRTRasterBand dataType="Byte" band="{i}"><ColorInterp>{ci}</ColorInterp>'
+                         f'{source(1, f"<ColorTableComponent>{i}</ColorTableComponent>", "ComplexSource")}</VRTRasterBand>')
+    elif bilevel:
+        bands.append('<VRTRasterBand dataType="Byte" band="1"><ColorInterp>Gray</ColorInterp>'
+                     f'{source(1, "<ScaleOffset>0</ScaleOffset><ScaleRatio>255</ScaleRatio>", "ComplexSource")}</VRTRasterBand>')
     else:
         dtype = _GDAL_TYPES.get(src.dtypes[0])
         if dtype is None:
             raise ValueError(f"unsupported pixel type {src.dtypes[0]}")
-        for i in range(1, src.count + 1):
-            bands.append(
-                f'<VRTRasterBand dataType="{dtype}" band="{i}"><SimpleSource>'
-                f'<SourceFilename relativeToVRT="0">{fname}</SourceFilename><SourceBand>{i}</SourceBand>{rect}'
-                f"</SimpleSource></VRTRasterBand>"
-            )
-    return (f'<VRTDataset rasterXSize="{W}" rasterYSize="{H}"><GCPList Projection="{wkt}">{gcps}</GCPList>'
-            + "".join(bands) + "</VRTDataset>")
+        n = {2: 1, 4: 3}.get(src.count, src.count)  # drop gray+alpha / RGBA alpha
+        for i in range(1, n + 1):
+            bands.append(f'<VRTRasterBand dataType="{dtype}" band="{i}">{source(i)}</VRTRasterBand>')
+
+    if model.method == "embedded":
+        wkt = escape(model.crs.to_wkt())
+        gt = model.affine.to_gdal()
+        geo = f"<SRS>{wkt}</SRS><GeoTransform>{', '.join(repr(float(v)) for v in gt)}</GeoTransform>"
+    else:
+        wkt = escape(model.crs.to_wkt(), {'"': "&quot;"})
+        gcps = "".join(
+            f'<GCP Id="{escape(str(g.id), {chr(34): "&quot;"})}" Pixel="{g.col!r}" Line="{g.row!r}" X="{g.x!r}" Y="{g.y!r}" Z="0"/>'
+            for g in model.to_rasterio_gcps()
+        )
+        geo = f'<GCPList Projection="{wkt}">{gcps}</GCPList>'
+    return f'<VRTDataset rasterXSize="{W}" rasterYSize="{H}">{geo}{"".join(bands)}</VRTDataset>', len(bands)
 
 
 def warp_sheet(scan_path: str, model: GCPModel, out_path: Path, resampling: str = "nearest") -> dict:
@@ -112,28 +129,17 @@ def warp_sheet(scan_path: str, model: GCPModel, out_path: Path, resampling: str 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     vrt_path = out_path.with_suffix(".src.vrt")
     with open_raster(scan_path) as scan:
-        try:
-            paletted = bool(scan.colormap(1)) and scan.count == 1
-        except ValueError:
-            paletted = False
-        # Palettes are expanded to RGB in the VRT, so any resampling method is safe.
-        use_vrt = paletted or model.method != "embedded"
-        opts = {} if model.method == "embedded" else model.warp_options()
-        if model.method != "embedded":
-            vrt_path.write_text(_gcp_vrt(scan, scan_path, model, paletted), encoding="utf-8")
+        xml, _ = _source_vrt(scan, scan_path, model)
+    vrt_path.write_text(xml, encoding="utf-8")
+    opts = model.warp_options()
     try:
-        if model.method == "embedded" and paletted:
-            vrt_path.write_text(_embedded_palette_vrt(scan_path), encoding="utf-8")
-        src_file = vrt_path if use_vrt else Path(scan_path)
-        with open_raster(src_file) as src:
+        with open_raster(vrt_path) as src:
             count = src.count
             if model.method == "embedded":
                 transform, width, height = calculate_default_transform(crs, crs, src.width, src.height, *src.bounds)
-                extra = {"src_transform": src.transform}
             else:
                 transform, width, height = calculate_default_transform(
                     crs, crs, src.width, src.height, gcps=model.to_rasterio_gcps(), **opts)
-                extra = {}
             profile = {
                 "driver": "GTiff", "width": width, "height": height, "count": count + 1,
                 "dtype": src.dtypes[0], "crs": crs, "transform": transform, "tiled": True,
@@ -143,29 +149,13 @@ def warp_sheet(scan_path: str, model: GCPModel, out_path: Path, resampling: str 
                 reproject(
                     source=rasterio.band(src, list(range(1, count + 1))),
                     destination=rasterio.band(dst, list(range(1, count + 2))),
-                    src_crs=crs, dst_transform=transform, dst_crs=crs, dst_alpha=count + 1,
-                    resampling=rs, warp_mem_limit=256, **extra, **opts,
+                    dst_transform=transform, dst_crs=crs, dst_alpha=count + 1,
+                    resampling=rs, warp_mem_limit=256, **opts,
                 )
                 dst.colorinterp = _colorinterp(count + 1)
     finally:
         vrt_path.unlink(missing_ok=True)
     return {"warped_path": str(out_path), "warped_size": [width, height], "pixel_size": [transform.a, -transform.e]}
-
-
-def _embedded_palette_vrt(scan_path: str) -> str:
-    with open_raster(scan_path) as src:
-        W, H = src.width, src.height
-        gt = src.transform.to_gdal()
-        wkt = escape(src.crs.to_wkt(), {'"': "&quot;"}) if src.crs else ""
-    fname = escape(str(Path(scan_path).resolve()))
-    rect = f'<SrcRect xOff="0" yOff="0" xSize="{W}" ySize="{H}"/><DstRect xOff="0" yOff="0" xSize="{W}" ySize="{H}"/>'
-    bands = "".join(
-        f'<VRTRasterBand dataType="Byte" band="{i}"><ComplexSource><SourceFilename relativeToVRT="0">{fname}</SourceFilename>'
-        f"<SourceBand>1</SourceBand>{rect}<ColorTableComponent>{i}</ColorTableComponent></ComplexSource></VRTRasterBand>"
-        for i in (1, 2, 3)
-    )
-    return (f'<VRTDataset rasterXSize="{W}" rasterYSize="{H}"><SRS>{wkt}</SRS>'
-            f"<GeoTransform>{', '.join(repr(v) for v in gt)}</GeoTransform>{bands}</VRTDataset>")
 
 
 def _colorinterp(count: int):
@@ -175,7 +165,7 @@ def _colorinterp(count: int):
         return [CI.gray, CI.alpha]
     if count == 4:
         return [CI.red, CI.green, CI.blue, CI.alpha]
-    return [CI.gray] * (count - 1) + [CI.alpha]
+    return [CI.undefined] * (count - 1) + [CI.alpha]
 
 
 def run(cfg: dict, manifest: Manifest) -> None:
