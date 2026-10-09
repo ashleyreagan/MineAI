@@ -4,28 +4,24 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - numpy
-  - pandas
-  - pillow
-  - rasterio
-  - geopandas
-  - shapely
-  - fiona
-  - pyproj
-  - opencv
-  - tesseract
-  - pytesseract
-  - pdal
-  - rich
-  - tqdm
-  - streamlit
-  - folium
-  - nodejs
-  - jupyterlab
-  - pytest
+  - numpy>=1.24,<3
+  - rasterio>=1.3.9,<2
+  - pyproj>=3.5,<4
+  - shapely>=2.0,<3
+  - geopandas>=0.14,<2
+  - pillow>=10,<13
+  - pyyaml>=6,<7
+  - rich>=13,<15
+  - tesseract>=5,<6
+  - pytesseract>=0.3.10,<0.4
+  - scipy>=1.10,<2          # tests only
+  - pytest>=7
+  # GUI
+  - streamlit>=1.50,<2
+  - folium>=0.15,<1
+  - pandas>=2,<3
   - pip:
-      - ultralytics
-      - torch
-      - torchvision
-      - transformers
-      - leafmap
+      # Detection. ultralytics pulls in torch and opencv-python from pip; keeping
+      # OpenCV out of the conda list above avoids the conda/pip OpenCV clash.
+      - ultralytics>=8.1,<9
+      - -e .

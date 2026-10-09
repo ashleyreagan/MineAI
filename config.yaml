@@ -1,11 +1,41 @@
+# MineAI configuration. Any key left out uses the default in src/mineai/config.py.
+# Relative paths are resolved from this file's folder.
+
 paths:
-  raw: data/raw
-  georef: data/georef
-  ocr: data/ocr
-  detect: data/detect
-  final: data/final
-  yolo_weights: models/yolo/mine_entry_yolov8n.pt
-  trocr_id: "facebook/trocr-base-printed"
-crs: "EPSG:26917"   # NAD83 / UTM zone 17N
-basemap: "usgs_topo"
-log_level: "INFO"
+  raw: data/raw            # scanned sheets (.tif/.tiff/.jpg/.png/.jp2)
+  gcp: data/gcp            # <sheet>.points (QGIS Georeferencer) or <sheet>.csv (col,row,x,y)
+  georef: data/georef      # georef records (GCPs, residuals, RMSE) + warped GeoTIFFs
+  ocr: data/ocr            # OCR text lines, pixel coordinates
+  detect: data/detect      # detection candidates, pixel coordinates
+  final: data/final        # GeoPackage for GIS review
+  manifest: data/manifest.json
+
+georef:
+  method: poly1            # poly1 (affine) | poly2 | tps
+  default_crs: EPSG:26917  # NAD83 / UTM 17N; for CSV GCPs without a "# crs:" line. QGIS .points carry their own CRS.
+  resampling: nearest      # for the warped viewing copy only
+  write_warped: true
+  max_rmse: null           # e.g. 15 to flag sheets whose GCP RMSE exceeds 15 map units
+
+ocr:
+  enabled: true
+  lang: eng
+  psm: 11                  # sparse text; suits labels scattered across a map
+  tile_size: 2000
+  overlap: 400             # should exceed the longest label you care about, in pixels
+  min_conf: 50             # Tesseract confidence 0-100; map lettering often scores 50-70
+  rotations: [0]           # add 90 and 270 to read labels written up/down the sheet (3x slower)
+
+detect:
+  weights: models/yolo/mine_entry.pt   # not included; see docs/TRAINING.md
+  tile_size: 1024
+  overlap: 256             # must exceed the largest symbol, in pixels
+  imgsz: 1024
+  conf: 0.25
+  iou: 0.5
+  batch: 8
+  device: null             # null = auto; "cpu", "0" (first GPU), "mps" (Apple)
+
+export:
+  crs: EPSG:4269           # NAD83 geographic, as AMLIS uses
+  gpkg: mineai_candidates.gpkg

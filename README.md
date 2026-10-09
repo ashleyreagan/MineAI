@@ -1,169 +1,168 @@
-# 🪨 MineAI  
-**AI-Assisted Geospatial Intelligence for Historic Mine Maps**  
-*Part of the Appalachian Restoration Intelligence Ecosystem*  
+# 🪨 MineAI
+**AI-assisted digitizing of historic mine maps**
+*Part of the Appalachian Restoration Intelligence Ecosystem*
 ![MineAI banner](assets/header_banner_final_proxy.png)
 
 ---
 
+### 📍 Status: alpha
+
+| Part | State |
+|---|---|
+| Ingest (any size scan, manifest with hashes) | ✅ working, tested |
+| Georeferencing from GCPs (QGIS `.points` or CSV; affine, 2nd-order, thin-plate spline) with per-GCP residuals and RMSE | ✅ working, tested |
+| OCR of map lettering (Tesseract, tiled, optional rotated text) | ✅ working, tested on synthetic sheets |
+| Mine-entry symbol detection (YOLO, tiled at native resolution) | ⚙️ pipeline working and tested; **no trained model yet** |
+| Export to GeoPackage with provenance and review fields | ✅ working, tested |
+| QA dashboard (Streamlit) | ✅ working |
+| Training-set builder and held-out evaluation | ✅ working, tested |
+
+**No accuracy numbers are published yet.** They will come from `mineai evaluate`
+on held-out labeled sheets once a model is trained (see [docs/TRAINING.md](docs/TRAINING.md)).
+Until then, `mineai run --skip detect` georeferences and OCRs sheets, and
+detection fails with a clear message rather than inventing results.
+
+Everything MineAI exports is a **candidate for analyst review**, never a finished
+inventory. Nothing it produces should go into AMLIS or any other system of
+record without review.
+
+---
+
 ### 🧭 Overview
-**MineAI** converts historic underground mine maps into georeferenced, machine-readable spatial datasets using a pipeline of **OCR**, **deep learning (YOLOv8)**, and **AI-assisted georeferencing**.  
-It transforms century-old survey sheets and scanned mylars into modern, analyzable GIS layers suitable for **AMLIS**, **OSMRE**, and **state geological survey** workflows.
+MineAI turns scanned underground mine maps into georeferenced, machine-readable
+GIS layers for AML inventory and inspection work. It:
 
-MineAI is a core component of the **Appalachian Restoration Intelligence ecosystem**, complementing the [AMD Water Quality Pipeline](https://github.com/ashleyreagan/AMD_Water_Quality_Pipeline).  
-Together, these tools modernize the full lifecycle of mine data — from historic cartography to present-day water-quality analytics — enabling reproducible science and cross-agency collaboration.
+1. **georeferences** each sheet from ground control points, reporting the error;
+2. **reads the lettering** (mine names, seam notes, labels) with OCR;
+3. **finds mine-entry symbols** (portals, drifts, shafts, slopes) with a YOLO detector;
+4. **projects** text and symbols into map coordinates and writes a GeoPackage
+   whose features are tagged `review_status = unreviewed`, with full provenance.
 
----
-
-### 🔬 Methodology — How It Works
-
-| Stage | Description |
-|--------|--------------|
-| **1️⃣ Ingestion & QC** | Load scanned rasters (.tif/.jpg/.png), read EXIF/DPI, and build an ingest manifest for batch tracking. |
-| **2️⃣ AI-Assisted Georeferencing** | Detect alignment cues (GCPs, section lines, rivers, and topo matches) and solve affine/projective warps to USGS/NAIP basemaps. |
-| **3️⃣ OCR & Layout Parsing** | Extract mine names, seam notes, T/R/S, and annotations using **Tesseract** or **TrOCR** for stylized handwriting. |
-| **4️⃣ Mine Entry Detection** | **YOLOv8** identifies portal, adit, shaft, and slope symbols; detections are projected into real-world coordinates. |
-| **5️⃣ Post-Processing & Export** | Clean duplicates, attach metadata, and export shapefiles or GeoJSONs. |
-| **6️⃣ QA Visualization** | A built-in Streamlit dashboard previews detections, bounding boxes, and alignment accuracy for analyst review. |
+It complements the [AMD Water Quality Pipeline](https://github.com/ashleyreagan/AMD_Water_Quality_Pipeline).
 
 ---
 
-### 🧩 Architecture
+### 🔬 How it works
+
+| Stage | Command | What it does |
+|---|---|---|
+| **1 Ingest** | `mineai ingest` | Inventories `data/raw/` and records size, bands, bit depth, palette, DPI and SHA-256 in `data/manifest.json`. Any size of sheet works, because nothing is ever loaded whole. |
+| **2 Georef** | `mineai georef` | Fits a pixel→map transform from `data/gcp/<sheet>.points` (QGIS) or `.csv`, or uses an already-georeferenced GeoTIFF or world file. Writes the GCP residuals and RMSE, plus a warped GeoTIFF for viewing. See [docs/GEOREFERENCING.md](docs/GEOREFERENCING.md). |
+| **3 OCR** | `mineai ocr` | Runs Tesseract in sparse-text mode over overlapping tiles of the **original** scan, removes duplicates between tiles, and can also read labels rotated 90°/270°. |
+| **4 Detect** | `mineai detect` | Runs YOLO over overlapping native-resolution tiles of the original scan and merges duplicates across tiles. Fails if no trained weights are configured. |
+| **5 Export** | `mineai export` | Projects detections and text through each sheet's GCP model into `data/final/mineai_candidates.gpkg`, with layers `entry_candidates`, `ocr_text` and `sheets`. Candidates on sheets that aren't georeferenced go to `unplaced_candidates.csv`. |
+| **QA** | `mineai gui` | Dashboard showing the scan with boxes, GCP residuals, and candidates on USGS Topo. |
+
+OCR and detection run on the original scan, not the warped one. Warping rotates
+and resamples lettering and symbols. Positions stay in pixel space until export,
+which projects them with the same model as the warp.
 
 ```text
-                 ┌────────────┐
-   Scans (.tif)  │  Ingest    │  EXIF/DPI, manifest
-      ─────────► │ (ingest/)  │────────────────┐
-                 └─────┬──────┘                │
-                       │                       │
-                       ▼                       │
-                 ┌────────────┐                │
-  GCPs / cues    │ Georef     │  affine/projective warp
- (optional) ───► │ (georef/)  │──────────────┐ │
-                 └─────┬──────┘              │ │
-                       │                     │ │
-                       ├───────────────┐     │ │
-                       │               │     │ │
-                       ▼               ▼     ▼ ▼
-                ┌───────────┐   ┌───────────┐ ┌───────────┐
-                │   OCR     │   │  Detect   │ │  Streamlit│
-                │ (ocr/)    │   │ (detect/) │ │  (gui/)   │
-                └────┬──────┘   └────┬──────┘ └────┬──────┘
-                     │              │              │
-                     ▼              ▼              ▼
-                 JSON text     GeoJSON boxes   QA preview
-                     └──────────────┬──────────────┘
-                                    ▼
-                            Shapefile / GeoJSON
+ data/raw/*.tif|png|jpg ──► ingest ──► manifest.json (size, dpi, sha256, status per stage)
+                              │
+ data/gcp/<sheet>.points|csv ─┼──► georef ──► <sheet>_georef.json (GCPs, residuals, RMSE)
+                              │                <sheet>_georef.tif  (viewing copy)
+                              ├──► ocr ─────► <sheet>_ocr.json        (pixel coords)
+                              └──► detect ──► <sheet>_candidates.json (pixel coords)
+                                                   │
+                                     export ◄──────┘  project through GCP model
+                                       │
+                                       ▼
+                     mineai_candidates.gpkg  (entry_candidates · ocr_text · sheets)
 ```
+
+Every stage records `ok`, `skipped` (with the reason) or `failed` (with the error) for
+every sheet. `mineai` exits with status 1 if anything failed.
 
 ---
 
 ### 🚀 Quickstart
 
 ```bash
-# 1. Create the environment
-conda env create -f environment.yml
+conda env create -f environment.yml      # or: pip install -e ".[detect,gui,dev]" (+ Tesseract)
 conda activate mineai
 
-# 2. Run the full pipeline
-python run_pipeline.py
-
-# 3. Launch visualization dashboard
-streamlit run src/gui/app_streamlit.py
+mineai run --skip detect                 # georef + OCR + export on the sample sheet
+mineai gui                               # QA dashboard
+pytest                                   # the test suite (synthetic sheets, ~20 s)
 ```
 
-**Inputs:** scanned maps (`data/raw/`)  
-**Outputs:** processed shapefiles/GeoJSON (`data/final/`), detection intermediates (`data/detect/`)
+The repo includes a synthetic sample sheet (`data/raw/sample_sheet.png`) and its
+GCPs (`data/gcp/sample_sheet.csv`). `scripts/make_sample.py` regenerates them.
+
+**For your own sheets:** put scans in `data/raw/`, create a GCP file for each in
+`data/gcp/` ([how](docs/GEOREFERENCING.md)), and check `georef.default_crs` and
+`export.crs` in `config.yaml`. Once you have trained weights
+([how](docs/TRAINING.md)), set `detect.weights` and run `mineai run`.
+
+`python run_pipeline.py` still works and is the same as `mineai run`.
 
 ---
 
-### 🧠 Models
+### 📦 Output fields (`entry_candidates`)
 
-#### YOLOv8 — Mine Entry Detector
-- Trained on annotated portal/adit/shaft/slope symbols from historic coal-field sheets.  
-- Uses multi-resolution training (imgsz=640–1024) for improved small-symbol detection.  
-- Fine-tuned with active learning across PA, WV, and KY mine-map archives.
+| Field | Meaning |
+|---|---|
+| `candidate_id` | `<sheet>:<n>` |
+| `cls`, `score` | detected symbol class and model confidence |
+| `sheet`, `sheet_sha16` | source scan and its hash |
+| `model`, `model_sha16` | weights file and hash that produced it |
+| `pixel_x`, `pixel_y`, `bbox_px` | position on the original scan |
+| `georef_method`, `georef_rmse`, `georef_rmse_kind`, `georef_crs` | how it was placed, and how well the GCPs agree |
+| `review_status`, `reviewer`, `review_notes` | for the analyst; starts as `unreviewed` |
+| `exported_at`, `mineai_version` | run provenance |
 
-Example:
-```bash
-yolo task=detect mode=train data=data/mine_entries.yaml model=yolov8m.pt epochs=100 imgsz=640
-```
-
-#### OCR — Tesseract / TrOCR
-- Default: **Tesseract** for speed and batch reliability.  
-- Optional: **TrOCR** (Microsoft Vision) for stylized or cursive handwriting.  
-- Swap via `trocr_id` in `config.yaml`.
-
----
-
-### 🛰️ Georeferencing Details
-- **ORB / SIFT keypoints** for coarse alignment to USGS base maps.  
-- **RANSAC** for outlier-robust transformation fitting.  
-- Supports **affine**, **projective**, and (experimental) **thin-plate spline** warps.  
-- Exports transformation matrices and RMSE reports for QA/QC.  
-- Integrates with PDAL for LiDAR-based elevation normalization or terrain differencing.
+`ocr_text` carries the text, Tesseract confidence, rotation and the same
+provenance. `sheets` carries each footprint with its GCP count and RMSE.
 
 ---
 
-### 🧭 Integration
+### ⚙️ Configuration
 
-| Target System | Integration Type | Description |
-|----------------|-----------------|--------------|
-| **ArcGIS Pro / QGIS** | Direct import | Load shapefiles/GeoJSONs for analysis or digitizing QA. |
-| **OSMRE AMLIS** | Attribute harmonization | Aligns MineAI outputs with AMLIS feature codes and reclamation IDs. |
-| **AMD Water Quality Pipeline** | Spatial overlay | Feeds mine-entry and discharge coordinates into AMD impact modeling. |
-| **State Geological Surveys** | Repository ingest | Converts scanned mylars into vector formats for permanent GIS storage. |
-| **PostGIS / AGOL** | Publishing | Optional push to enterprise geodatabases or AGOL feature services. |
+`config.yaml` lists every option with comments. The ones most often changed:
 
----
-
-### ⚙️ Benchmarks
-
-| Stage | Sample Runtime (PA subset, ~100 maps) | Notes |
-|--------|--------------------------------------|-------|
-| Ingest & OCR | ~4 min | 12-core M3 workstation (multithreaded OCR) |
-| YOLOv8 Detection | ~12 min | GPU-accelerated (RTX A5000) |
-| Georeferencing | ~6 min | Parallel warp via Rasterio/GDAL |
-| Total | ~22 min/map set | Full end-to-end pipeline with QA export |
+- `georef.method`: `poly1` | `poly2` | `tps`; `georef.default_crs`; `georef.max_rmse`
+- `ocr.rotations`: `[0]` by default; `[0, 90, 270]` also reads labels running up and down the sheet
+- `detect.weights`, `detect.conf` (lower it to raise recall), `detect.overlap` (must exceed the largest symbol)
+- `export.crs`: `EPSG:4269` (NAD83 geographic) by default
 
 ---
 
 ### 🧩 Roadmap
 
-- [ ] Multi-state training data for Central Appalachia  
-- [ ] Confidence-weighted symbol clustering (YOLOv9 integration)  
-- [ ] Automated map-sheet tiling and merge utilities  
-- [ ] Streamlit QA annotation editor  
-- [ ] Mine pool / elevation correlation using LiDAR  
+- [ ] Label sheets from several states and companies; train and publish the first model **with held-out metrics**
+- [ ] Review editing in the dashboard (accept / reject / reclassify, written back to the GeoPackage)
+- [ ] Semi-automatic GCPs: detect coordinate ticks and grid intersections
+- [ ] Handwriting OCR for annotations (e.g. TrOCR on line crops)
+- [ ] Map export fields to AMLIS feature codes
+- [ ] Publish to PostGIS / ArcGIS Online
+- [ ] Mine pool and elevation analysis with 3DEP LiDAR
 
 ---
 
 ### 💬 Citation
 
-> **Mitchell, A. (2025).** *MineAI: AI-Assisted Geospatial Intelligence for Historic Underground Mine Maps.* GitHub.  
+> **Mitchell, A. (2025).** *MineAI: AI-Assisted Digitizing of Historic Underground Mine Maps.* GitHub.
 > [https://github.com/ashleyreagan/MineAI](https://github.com/ashleyreagan/MineAI)
 
 ---
 
 ### 🛠️ Development & Contributing
-1. Fork the repository.  
-2. Keep pull requests small and reproducible.  
-3. Include a demo raster (≤25 MB) and output screenshot in `/tests/demo/`.  
-4. Run lint/tests via `pytest`.
+1. Fork the repository and `pip install -e ".[detect,gui,dev]"`.
+2. Keep pull requests small; add a test, using `mineai.synthetic` for sheets with known answers.
+3. `pytest` must pass (`pytest -m "not slow"` skips the 276-megapixel sheet test).
 
 ---
 
 ### 🪪 License
-MIT © 2025 Ashley Mitchell — *Not an official DOI/OSMRE product.*
+MIT © 2025 Ashley Mitchell. *Not an official DOI/OSMRE product.*
 
 ---
 
 ### 🙏 Acknowledgments
-MineAI builds on the mission of **OSMRE**, **state geological surveys**, and the **Appalachian Mine Mapping community**.  
-Thanks to the open-data initiatives of **PASDA**, **USGS**, and **EPA** for providing the foundational geospatial layers that make automated reclamation analysis possible.
-
----
+MineAI builds on the mission of **OSMRE**, **state geological surveys**, and the
+**Appalachian mine-mapping community**. Thanks to the open-data initiatives of
+**PASDA**, **USGS**, and **EPA** for the geospatial layers that make this work possible.
 
 ### 🧠 Related Projects
-- **[AMD Water Quality Pipeline](https://github.com/ashleyreagan/AMD_Water_Quality_Pipeline)** — integrates chemistry and mine data for watershed restoration analytics.  
-- **MineAI Streamlit Dashboard (coming soon)** — unified QA interface for cross-state map ingestion and review.
+- **[AMD Water Quality Pipeline](https://github.com/ashleyreagan/AMD_Water_Quality_Pipeline)**: chemistry and mine data for watershed restoration analytics.
